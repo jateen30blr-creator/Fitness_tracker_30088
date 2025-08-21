@@ -1,0 +1,45 @@
+-- Table for users, including a unique username for social features
+CREATE TABLE IF NOT EXISTS users (
+    user_id SERIAL PRIMARY KEY,
+    username VARCHAR(50) UNIQUE NOT NULL,
+    email VARCHAR(100) UNIQUE NOT NULL,
+    weight_kg DECIMAL(5, 2),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Table for tracking individual workout sessions
+CREATE TABLE IF NOT EXISTS workouts (
+    workout_id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(user_id),
+    workout_date DATE NOT NULL,
+    duration_minutes INTEGER,
+    notes TEXT
+);
+
+-- Table for logging individual exercises within a workout
+CREATE TABLE IF NOT EXISTS exercises (
+    exercise_id SERIAL PRIMARY KEY,
+    workout_id INTEGER REFERENCES workouts(workout_id),
+    exercise_name VARCHAR(100) NOT NULL,
+    reps INTEGER,
+    sets INTEGER,
+    weight_kg DECIMAL(7, 2)
+);
+
+-- Table to manage social connections between users
+CREATE TABLE IF NOT EXISTS friends (
+    friendship_id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(user_id),
+    friend_id INTEGER REFERENCES users(user_id)
+);
+
+-- Table for setting and tracking personal goals
+CREATE TABLE IF NOT EXISTS goals (
+    goal_id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(user_id),
+    goal_type VARCHAR(50) NOT NULL,
+    target_value DECIMAL(10, 2),
+    start_date DATE NOT NULL,
+    end_date DATE NOT NULL,
+    notes TEXT
+);
