@@ -1,0 +1,139 @@
+Frontend 
+import streamlit as st
+import pandas as pd
+from datetime import date
+from backend_fitness import (
+    create_user,
+    get_user_by_username,
+    add_friend,
+    log_workout,
+    get_weekly_workout_leaderboard,
+    get_user_workout_history,
+    set_user_goal,
+    get_user_goal
+)
+
+# --- Session State Management for a single user ---
+# This simulates a simple login for a single user without a full authentication system
+if "logged_in_user" not in st.session_state:
+    st.session_state.logged_in_user = None
+
+def main():
+    st.set_page_config(
+        page_title="Personal Fitness Tracker",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+
+    st.title("🏃 Personal Fitness Tracker")
+    st.markdown("Track your workouts, set goals, and compete with friends.")
+
+    # --- Login/User Creation Section ---
+    if not st.session_state.logged_in_user:
+        st.header("Login or Create Profile")
+        username = st.text_input("Username")
+        if st.button("Log In"):
+            user = get_user_by_username(username)
+            if user:
+                st.session_state.logged_in_user = user
+                st.success(f"Welcome back, {user['username']}!")
+                st.rerun()
+            else:
+                st.error("User not found. Please try again or create a new profile.")
+        
+        with st.expander("Create a New Profile"):
+            new_username = st.text_input("New Username")
+            new_email = st.text_input("Email")
+            new_weight = st.number_input("Current Weight (kg)", min_value=1.0, format="%.2f")
+            if st.button("Create Profile"):
+                user_id = create_user(new_username, new_email, new_weight)
+                if user_id:
+                    st.success("Profile created! Please log in.")
+                    st.session_state.logged_in_user = {"user_id": user_id, "username": new_username}
+                    st.rerun()
+        return
+
+    # --- Main Application UI (after login) ---
+    user = st.session_state.logged_in_user
+    st.sidebar.title(f"Hello, {user['username']}!")
+    
+    if st.sidebar.button("Log Out"):
+        st.session_state.logged_in_user = None
+        st.rerun()
+
+    # --- Main Tabs ---
+    tab1, tab2, tab3, tab4 = st.tabs(["Dashboard", "Log Workout", "Friends & Leaderboard", "Goals"])
+
+    with tab1:
+        st.header("My Dashboard")
+        history_df = get_user_workout_history(user['user_id'])
+        if not history_df.empty:
+            st.subheader("Workout History")
+            st.dataframe(history_df, use_container_width=True)
+            
+            st.subheader("Progress Over Time")
+            history_df['date'] = pd.to_datetime(history_df['date'])
+            st.line_chart(history_df.set_index('date')['duration'])
+        else:
+            st.info("No workouts logged yet. Go to the 'Log Workout' tab to get started!")
+
+    with tab2:
+        st.header("Log a New Workout")
+        with st.form("new_workout_form", clear_on_submit=True):
+            workout_date = st.date_input("Date", date.today())
+            duration = st.number_input("Duration (minutes)", min_value=1)
+            
+            st.subheader("Exercises")
+            exercises = []
+            num_exercises = st.number_input("Number of different exercises", min_value=1, max_value=10, value=1)
+            for i in range(num_exercises):
+                st.markdown(f"**Exercise #{i+1}**")
+                name = st.text_input(f"Exercise Name", key=f"ex_name_{i}")
+                reps = st.number_input(f"Reps", min_value=0, key=f"reps_{i}")
+                sets = st.number_input(f"Sets", min_value=0, key=f"sets_{i}")
+                weight = st.number_input(f"Weight (kg)", min_value=0.0, format="%.2f", key=f"weight_{i}")
+                exercises.append({"name": name, "reps": reps, "sets": sets, "weight": weight})
+            
+            submit_button = st.form_submit_button("Log Workout")
+            if submit_button:
+                log_workout(user['user_id'], workout_date, duration, exercises)
+                st.rerun()
+
+    with tab3:
+        st.header("Leaderboard & Friends")
+        st.subheader("Weekly Workout Minutes Leaderboard")
+        leaderboard_df = get_weekly_workout_leaderboard(user['user_id'])
+        if not leaderboard_df.empty:
+            st.dataframe(leaderboard_df, use_container_width=True)
+        else:
+            st.info("No friends added or no workouts logged this week. Add friends below!")
+
+        st.subheader("Add a New Friend")
+        friend_username = st.text_input("Friend's Username")
+        if st.button("Add Friend"):
+            add_friend(user['user_id'], friend_username)
+            st.rerun()
+
+    with tab4:
+        st.header("Set a Goal")
+        st.subheader("Current Goal")
+        current_goal = get_user_goal(user['user_id'])
+        if current_goal:
+            st.markdown(f"**Goal Type:** {current_goal['type']}")
+            st.markdown(f"**Target Value:** {current_goal['target']}")
+            st.markdown(f"**End Date:** {current_goal['end_date'].strftime('%B %d, %Y')}")
+        else:
+            st.info("You haven't set a goal yet.")
+        
+        st.subheader("Set a New Goal")
+        with st.form("set_goal_form", clear_on_submit=True):
+            goal_type = st.selectbox("Goal Type", ["Workout Minutes/Week", "Weight Loss (kg)", "Reps/Set", "Other"])
+            target_value = st.number_input("Target Value", min_value=0.0, format="%.2f")
+            end_date = st.date_input("Target Completion Date", date.today())
+            
+            if st.form_submit_button("Set Goal"):
+                set_user_goal(user['user_id'], goal_type, target_value, end_date)
+                st.rerun()
+
+if __name__ == "__main__":
+    main()
