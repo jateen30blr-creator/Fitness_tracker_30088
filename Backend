@@ -1,0 +1,236 @@
+import psycopg2
+import pandas as pd
+import streamlit as st
+from datetime import date, timedelta
+
+# *** IMPORTANT: Replace these placeholder values with your actual PostgreSQL credentials ***
+DB_NAME = "Fitness_tracker"
+DB_USER = "postgres"
+DB_PASS = "Jateen26"
+DB_HOST = "localhost"
+DB_PORT = "5432"
+
+def get_db_connection():
+    """Establishes a connection to the PostgreSQL database."""
+    try:
+        conn = psycopg2.connect(
+            dbname=DB_NAME,
+            user=DB_USER,
+            password=DB_PASS,
+            host=DB_HOST,
+            port=DB_PORT
+        )
+        return conn
+    except psycopg2.OperationalError as e:
+        st.error(f"Error connecting to database: {e}")
+        return None
+
+# --- User and Friend Management ---
+
+def create_user(username, email, weight):
+    """Adds a new user to the database."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO users (username, email, weight_kg) VALUES (%s, %s, %s) RETURNING user_id;",
+                    (username, email, weight)
+                )
+                user_id = cur.fetchone()[0]
+                conn.commit()
+                return user_id
+        except psycopg2.Error as e:
+            st.error(f"Database error: {e}")
+            return None
+        finally:
+            conn.close()
+
+def get_user_by_username(username):
+    """Retrieves a user's information by username."""
+    conn = get_db_connection()
+    if not conn:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT user_id, username FROM users WHERE username = %s;", (username,))
+            user_data = cur.fetchone()
+            if user_data:
+                return {"user_id": user_data[0], "username": user_data[1]}
+            return None
+    except psycopg2.Error as e:
+        st.error(f"Database error: {e}")
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+def add_friend(user_id, friend_username):
+    """Adds a friend connection based on usernames."""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    try:
+        friend_data = get_user_by_username(friend_username)
+        if not friend_data:
+            st.warning(f"User '{friend_username}' not found.")
+            return False
+        
+        friend_id = friend_data["user_id"]
+        if user_id == friend_id:
+            st.warning("You cannot add yourself as a friend.")
+            return False
+
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO friends (user_id, friend_id) VALUES (%s, %s);", (user_id, friend_id))
+            conn.commit()
+            st.success(f"Added {friend_username} as a friend.")
+            return True
+    except psycopg2.Error as e:
+        st.error(f"Database error: {e}")
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+# --- Workout Tracking ---
+
+def log_workout(user_id, workout_date, duration, exercises):
+    """Logs a new workout and its associated exercises."""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    try:
+        with conn.cursor() as cur:
+            # Insert workout and get its ID
+            cur.execute(
+                "INSERT INTO workouts (user_id, workout_date, duration_minutes) VALUES (%s, %s, %s) RETURNING workout_id;",
+                (user_id, workout_date, duration)
+            )
+            workout_id = cur.fetchone()[0]
+            
+            # Insert all exercises for the workout
+            for exercise in exercises:
+                cur.execute(
+                    "INSERT INTO exercises (workout_id, exercise_name, reps, sets, weight_kg) VALUES (%s, %s, %s, %s, %s);",
+                    (workout_id, exercise["name"], exercise["reps"], exercise["sets"], exercise["weight"])
+                )
+            conn.commit()
+            st.success("Workout logged successfully!")
+            return True
+    except psycopg2.Error as e:
+        st.error(f"Database error: {e}")
+        conn.rollback()
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+# --- Reporting and Leaderboard ---
+
+def get_weekly_workout_leaderboard(user_id):
+    """Generates a leaderboard of friends based on weekly workout minutes."""
+    conn = get_db_connection()
+    if not conn:
+        return pd.DataFrame()
+    
+    # Calculate the start of the current week (Monday)
+    today = date.today()
+    start_of_week = today - timedelta(days=today.weekday())
+    
+    query = """
+        SELECT
+            u.username,
+            COALESCE(SUM(w.duration_minutes), 0) AS total_minutes
+        FROM users u
+        LEFT JOIN friends f ON u.user_id = f.friend_id
+        LEFT JOIN workouts w ON w.user_id = f.friend_id
+        WHERE
+            f.user_id = %s AND w.workout_date >= %s
+        GROUP BY u.username
+        ORDER BY total_minutes DESC;
+    """
+    
+    try:
+        with conn.cursor() as cur:
+            cur.execute(query, (user_id, start_of_week))
+            data = cur.fetchall()
+            columns = ['username', 'total_minutes']
+            return pd.DataFrame(data, columns=columns)
+    except psycopg2.Error as e:
+        st.error(f"Database error: {e}")
+        return pd.DataFrame()
+    finally:
+        if conn:
+            conn.close()
+            
+def get_user_workout_history(user_id):
+    """Retrieves a history of a user's workouts."""
+    conn = get_db_connection()
+    if not conn:
+        return pd.DataFrame()
+        
+    query = """
+        SELECT
+            w.workout_date,
+            w.duration_minutes,
+            w.notes
+        FROM workouts w
+        WHERE w.user_id = %s
+        ORDER BY w.workout_date DESC;
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute(query, (user_id,))
+            data = cur.fetchall()
+            columns = ['date', 'duration', 'notes']
+            return pd.DataFrame(data, columns=columns)
+    except psycopg2.Error as e:
+        st.error(f"Database error: {e}")
+        return pd.DataFrame()
+    finally:
+        if conn:
+            conn.close()
+
+def get_user_goal(user_id):
+    """Retrieves the user's most recent goal."""
+    conn = get_db_connection()
+    if not conn:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT goal_type, target_value, end_date FROM goals WHERE user_id = %s ORDER BY end_date DESC LIMIT 1;",
+                (user_id,)
+            )
+            goal_data = cur.fetchone()
+            if goal_data:
+                return {"type": goal_data[0], "target": float(goal_data[1]), "end_date": goal_data[2]}
+            return None
+    except psycopg2.Error as e:
+        st.error(f"Database error: {e}")
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+def set_user_goal(user_id, goal_type, target_value, end_date):
+    """Sets a new goal for the user."""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO goals (user_id, goal_type, target_value, start_date, end_date) VALUES (%s, %s, %s, %s, %s);",
+                (user_id, goal_type, target_value, date.today(), end_date)
+            )
+            conn.commit()
+            st.success("Goal set successfully!")
+            return True
+    except psycopg2.Error as e:
+        st.error(f"Database error: {e}")
+        return False
+    finally:
+        if conn:
+            conn.close()
